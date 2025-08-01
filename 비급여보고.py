@@ -4,10 +4,15 @@ from io import BytesIO
 
 def process_excel(file):
     df = pd.read_excel(file)
+
+    # '차트번호'를 문자열로 변환해서 .0 같은 표시 방지
+    df['차트번호'] = df['차트번호'].astype(str)
+
     needed_cols = ['병동','보험','차트번호','환자성명','입원일시','처방의사',
                    '청구코드','오더코드','단가','처방용량','횟수','계산용량',
                    '오더명칭','오더일자','계산유형']
     df = df[needed_cols]
+
     df = df[df['계산용량'] < 3]
     df['오더금액'] = df['단가'] * df['계산용량']
 
