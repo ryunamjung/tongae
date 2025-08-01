@@ -45,11 +45,6 @@ if uploaded_file:
     st.subheader('요약 데이터')
     st.dataframe(summary)
 
-    st.markdown('### 원본 데이터 CSV 텍스트 (복사해서 사용 가능)')
-    st.code(df.to_csv(index=False), language='csv')
-
-    st.markdown('### 요약 데이터 CSV 텍스트 (복사해서 사용 가능)')
-    st.code(summary.to_csv(index=False), language='csv')
 
     st.download_button(
         label='처리된 엑셀 파일 다운로드',
