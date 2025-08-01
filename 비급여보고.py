@@ -14,12 +14,12 @@ def process_excel(file):
     df = df[df['계산용량'] < 3]
     df['오더금액'] = df['단가'] * df['계산용량']
 
-    summary = df.groupby('오더코드').agg({
-        '청구코드': 'first',
-        '오더금액': 'sum',
-        '단가': 'first',
-        '계산용량': 'sum',
-        '오더명칭': 'first'
+    summary = df.groupby('오더명칭').agg({
+    '청구코드': 'first',
+    '오더코드': 'first',   # '오더코드'도 포함하고 싶으면 추가
+    '오더금액': 'sum',
+    '단가': 'first',
+    '계산용량': 'sum'
     }).reset_index()
     summary = summary[['오더코드','청구코드','오더금액','단가','계산용량','오더명칭']]
 
