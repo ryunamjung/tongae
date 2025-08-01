@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from openpyxl.styles import numbers  # 날짜 포맷용
 
 def process_excel(file):
     # 1. 엑셀 파일 읽기
@@ -12,6 +11,10 @@ def process_excel(file):
                    '청구코드','오더코드','단가','처방용량','횟수','계산용량',
                    '오더명칭','오더일자','계산유형']
     df = df[needed_cols]
+
+    # 🔍 2.5 날짜 컬럼을 문자열로 변환 (엑셀에서 숫자로 안 보이게)
+    df['입원일시'] = df['입원일시'].astype(str)
+    df['오더일자'] = df['오더일자'].astype(str)
 
     # 3. '계산용량' 3 이상인 행 제외
     df = df[df['계산용량'] < 3]
@@ -42,18 +45,7 @@ def process_excel(file):
         # 요약 데이터 쓰기 (B1부터)
         summary.to_excel(writer, sheet_name=sheet, startrow=0, startcol=1, index=False)
 
-        # 날짜 포맷 적용
-        workbook = writer.book
-        worksheet = writer.sheets[sheet]
-
-        for idx, col_name in enumerate(df.columns):
-            if col_name in ['입원일시', '오더일자']:
-                col_letter = chr(65 + idx)  # A, B, C...
-                for row in range(8, 8 + len(df)):  # 시작은 A8 → 엑셀은 1-index
-                    cell = worksheet[f'{col_letter}{row}']
-                    cell.number_format = numbers.FORMAT_DATE_DATETIME
-
-    # 엑셀 파일 내용을 Bytes로 변환
+    # Bytes로 변환해서 반환
     processed_data = output.getvalue()
     return processed_data
 
@@ -71,6 +63,7 @@ if uploaded_file:
         file_name='processed_data.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
 
 
 
