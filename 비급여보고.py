@@ -11,7 +11,7 @@ def process_excel(file):
                    '오더명칭','오더일자','계산유형','보훈명칭']
     df = df[needed_cols]
 
-    df = df[df['계산용량'] < 3]
+    df = df[df['계산용량'] < 10]
     df['오더금액'] = df['단가'] * df['계산용량']
 
     summary = df.groupby('오더명칭').agg({
