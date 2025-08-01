@@ -33,22 +33,16 @@ def process_excel(file):
     # 7. 엑셀로 저장하기 (A8부터는 df, B1부터는 summary)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # 빈 데이터프레임 먼저 생성 (포맷 유지용)
-        empty_df = pd.DataFrame()
-        empty_df.to_excel(writer, index=False)
-
-        # writer.book = openpyxl.load_workbook(output) 안 해도 됨. 새 파일 생성됨
-        # 엑셀 시트 이름 지정 가능 (default: Sheet1)
         sheet = 'Sheet1'
 
-        # 원본 데이터는 A8부터 쓰기 (startrow=7 because 0-index)
+        # 원본 데이터는 A8부터 쓰기
         df.to_excel(writer, sheet_name=sheet, startrow=7, index=False)
 
-        # 요약 데이터는 B1부터 (엑셀 기준 컬럼 B는 1, 행 1은 0 index startrow=0, startcol=1)
+        # 요약 데이터는 B1부터
         summary.to_excel(writer, sheet_name=sheet, startrow=0, startcol=1, index=False)
 
-        writer.save()
-        processed_data = output.getvalue()
+    # 엑셀 파일 내용을 Bytes로 변환
+    processed_data = output.getvalue()
 
     return processed_data
 
@@ -66,5 +60,6 @@ if uploaded_file:
         file_name='processed_data.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
 
 
