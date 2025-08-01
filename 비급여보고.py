@@ -12,10 +12,6 @@ def process_excel(file):
                    '오더명칭','오더일자','계산유형']
     df = df[needed_cols]
 
-    # 🔍 2.5 날짜 컬럼을 문자열로 변환 (엑셀에서 숫자로 안 보이게)
-    df['입원일시'] = df['입원일시'].astype(str)
-    df['오더일자'] = df['오더일자'].astype(str)
-
     # 3. '계산용량' 3 이상인 행 제외
     df = df[df['계산용량'] < 3]
 
@@ -24,7 +20,7 @@ def process_excel(file):
 
     # 5. 요약 데이터 생성 ('오더코드'별 총합)
     summary = df.groupby('오더코드').agg({
-        '청구코드': 'first',
+        '청구코드': 'first',  # 동일 오더코드에 청구코드가 하나라 가정
         '오더금액': 'sum',
         '단가': 'first',
         '계산용량': 'sum',
@@ -34,27 +30,28 @@ def process_excel(file):
     # 6. 컬럼 순서 정리
     summary = summary[['오더코드','청구코드','오더금액','단가','계산용량','오더명칭']]
 
-    # 7. 엑셀로 저장 (A8부터 df, B1부터 summary)
+    # 7. 엑셀로 저장하기 (A8부터는 df, B1부터는 summary)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         sheet = 'Sheet1'
-        
-        # 원본 데이터 쓰기 (A8부터)
+
+        # 원본 데이터는 A8부터 쓰기
         df.to_excel(writer, sheet_name=sheet, startrow=7, index=False)
-        
-        # 요약 데이터 쓰기 (B1부터)
+
+        # 요약 데이터는 B1부터
         summary.to_excel(writer, sheet_name=sheet, startrow=0, startcol=1, index=False)
 
-    # Bytes로 변환해서 반환
+    # 엑셀 파일 내용을 Bytes로 변환
     processed_data = output.getvalue()
+
     return processed_data
 
-# Streamlit UI
 st.title('Excel 데이터 처리 및 저장')
 
 uploaded_file = st.file_uploader('엑셀 파일 업로드', type=['xlsx', 'xls'])
 if uploaded_file:
     result = process_excel(uploaded_file)
+
     st.success('처리 완료!')
 
     st.download_button(
@@ -63,6 +60,7 @@ if uploaded_file:
         file_name='processed_data.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
 
 
 
