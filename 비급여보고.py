@@ -3,10 +3,8 @@ import pandas as pd
 from io import BytesIO
 
 def process_excel(file):
-    df = pd.read_excel(file)
-
-    # '차트번호'를 문자열로 변환해서 .0 같은 표시 방지
-    df['차트번호'] = df['차트번호'].astype(str)
+    # '차트번호' 컬럼을 문자열로 읽기 (앞자리 0 유지)
+    df = pd.read_excel(file, dtype={'차트번호': str})
 
     needed_cols = ['병동','보험','차트번호','환자성명','입원일시','처방의사',
                    '청구코드','오더코드','단가','처방용량','횟수','계산용량',
@@ -57,6 +55,7 @@ if uploaded_file:
         file_name='processed_data.xlsx',
         mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
+
 
 
 
