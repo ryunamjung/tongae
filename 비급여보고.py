@@ -11,8 +11,6 @@ def process_excel(file):
                    '청구코드','오더코드','단가','처방용량','횟수','계산용량',
                    '오더명칭','오더일자','계산유형']
     df = df[needed_cols]
-    # 한번 더 명확히 컬럼 순서 재확인
-    df = df[needed_cols]
 
     # 3. '계산용량' 3 이상인 행 제외
     df = df[df['계산용량'] < 3]
@@ -37,7 +35,10 @@ def process_excel(file):
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         sheet = 'Sheet1'
 
+        # 원본 df 컬럼 순서 확실히 유지
+        df = df[needed_cols]
         df.to_excel(writer, sheet_name=sheet, startrow=7, index=False)
+
         summary.to_excel(writer, sheet_name=sheet, startrow=0, startcol=1, index=False)
 
     processed_data = output.getvalue()
