@@ -1,65 +1,217 @@
-import streamlit as st
+# main.py
+from __future__ import annotations
+
+import io
+import re
+from typing import Dict, List, Tuple
+
 import pandas as pd
-from io import BytesIO
+import streamlit as st
 
-def process_excel(file):
-    # '차트번호' 컬럼을 문자열로 읽기 (앞자리 0 유지)
-    df = pd.read_excel(file, dtype={'차트번호': str})
 
-    needed_cols = ['병동','보험','차트번호','환자성명','입원일시','처방의사',
-                   '청구코드','오더코드','오더금액','단가','처방용량','횟수','계산용량','일수','가산금액',
-                   '오더명칭','오더일자','계산유형','보훈명칭']
-    df = df[needed_cols]
+# =========================
+# 설정
+# =========================
+REQUIRED_COLS = ["차트번호", "오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]
+FILTER_COLS = ["오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]
 
-    df = df[df['계산용량'] < 10]
-    df['오더금액'] = df['단가'] * df['계산용량']
 
-    summary = df.groupby('오더명칭').agg({
-    '청구코드': 'first',
-    '오더코드': 'first',   # '오더코드'도 포함하고 싶으면 추가
-    '오더금액': 'sum',
-    '단가': 'first',
-    '계산용량': 'sum'
-    }).reset_index()
-    summary = summary[['오더코드','청구코드','오더금액','단가','계산용량','오더명칭']]
+# =========================
+# 유틸
+# =========================
+def _clean_sheet_name(name: str, used: set[str]) -> str:
+    """엑셀 시트명 제약 처리 + 중복 방지(31자/금지문자/중복)"""
+    name = (name or "").strip()
+    name = re.sub(r"[\\/*?:\[\]]", "_", name)
+    if not name:
+        name = "Sheet"
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        sheet = 'Sheet1'
-        df = df[needed_cols]
-        df.to_excel(writer, sheet_name=sheet, startrow=7, index=False)
-        summary.to_excel(writer, sheet_name=sheet, startrow=0, startcol=1, index=False)
+    base = name[:31]
+    if base not in used:
+        used.add(base)
+        return base
 
-    processed_data = output.getvalue()
+    i = 2
+    while True:
+        suffix = f"_{i}"
+        trimmed = base[: 31 - len(suffix)]
+        cand = f"{trimmed}{suffix}"
+        if cand not in used:
+            used.add(cand)
+            return cand
+        i += 1
 
-    return df, summary, processed_data
 
-st.title('Excel 데이터 처리 및 저장')
+def _to_number_series(s: pd.Series) -> pd.Series:
+    """문자/쉼표/공백 섞여도 숫자로 안전 변환 (오더금액, 단가용)"""
+    s = s.astype(str).str.strip()
+    s = s.replace({"nan": "", "None": ""})
+    s = s.str.replace(",", "", regex=False)
+    s = s.str.replace(r"[^0-9\.\-]", "", regex=True)
+    return pd.to_numeric(s, errors="coerce").fillna(0)
 
-uploaded_file = st.file_uploader('엑셀 파일 업로드', type=['xlsx', 'xls'])
-if uploaded_file:
-    df, summary, result = process_excel(uploaded_file)
 
-    st.success('처리 완료!')
+def _find_target_sheet(xls: pd.ExcelFile) -> str:
+    """차트번호 컬럼이 있는 시트를 우선 선택, 없으면 첫 시트"""
+    for sh in xls.sheet_names:
+        try:
+            df_head = pd.read_excel(xls, sheet_name=sh, nrows=5)
+            if "차트번호" in df_head.columns:
+                return sh
+        except Exception:
+            continue
+    return xls.sheet_names[0]
 
-    st.subheader('원본 데이터 (필터 및 계산 적용 후)')
-    st.dataframe(df)
 
-    st.subheader('요약 데이터')
-    st.dataframe(summary)
+def load_original_df(uploaded) -> Tuple[pd.DataFrame, str]:
+    """원본 DF를 '그대로' 읽어오기"""
+    data = uploaded.getvalue()
+    xls = pd.ExcelFile(io.BytesIO(data), engine="openpyxl")
+    target_sheet = _find_target_sheet(xls)
+    df = pd.read_excel(xls, sheet_name=target_sheet, engine="openpyxl")
+    return df, target_sheet
 
+
+def make_filtered_df(df_original: pd.DataFrame) -> pd.DataFrame:
+    """차트번호 == '소계' 필터 후, 지정 7컬럼만 추출"""
+    missing = [c for c in REQUIRED_COLS if c not in df_original.columns]
+    if missing:
+        raise ValueError(f"필수 컬럼 누락: {missing}")
+
+    chart = df_original["차트번호"].astype(str).str.strip()
+    sub = df_original.loc[chart.eq("소계"), FILTER_COLS].copy()
+
+    # 숫자열 안전 변환(요약/합계 정확)
+    sub["오더금액"] = _to_number_series(sub["오더금액"])
+    sub["단가"] = _to_number_series(sub["단가"])
+
+    return sub
+
+
+def build_output_excel(
+    per_file_original: Dict[str, pd.DataFrame],
+    per_file_filtered: Dict[str, pd.DataFrame],
+    summary_df: pd.DataFrame
+) -> bytes:
+    """
+    출력 엑셀 생성 규칙(요구사항 그대로):
+    - 각 파일별 시트
+      1) 위쪽: 차트번호=='소계' 필터 값(7컬럼)만 '표'로 표시 (헤더 포함)
+      2) 그 아래 '2줄' 띄우고
+      3) 원본을 '하나도 빠짐없이' 그대로(모든 행/모든 컬럼, 헤더 포함)
+    - 요약 시트: 소계 필터 7컬럼 안에서 오더금액 합계(파일명별)
+    """
+    out = io.BytesIO()
+    used_sheet_names: set[str] = set()
+
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        # 요약 시트
+        sum_sheet = _clean_sheet_name("요약", used_sheet_names)
+        summary_df.to_excel(writer, sheet_name=sum_sheet, index=False)
+
+        # 파일별 시트
+        for file_label in per_file_original.keys():
+            sh = _clean_sheet_name(file_label, used_sheet_names)
+            df_f = per_file_filtered[file_label]
+            df_o = per_file_original[file_label]
+
+            # 1) 위쪽: 소계 필터 표(헤더 포함) - 시작 row 0
+            #    (요구가 "가장윗칸"에 붙여주기 -> A1부터)
+            df_f.to_excel(writer, sheet_name=sh, index=False, startrow=0)
+
+            # 2) 아래 2줄 띄우고 3) 원본(헤더 포함)
+            # filtered 표가 차지하는 행 수:
+            # - 헤더 1행 + 데이터 len(df_f)
+            filtered_rows = 1 + len(df_f)
+            # 두 줄 공백 => +2
+            startrow_original = filtered_rows + 2
+            df_o.to_excel(writer, sheet_name=sh, index=False, startrow=startrow_original)
+
+    out.seek(0)
+    return out.getvalue()
+
+
+# =========================
+# Streamlit UI
+# =========================
+st.set_page_config(page_title="소계 필터 + 원본 그대로 저장", layout="wide")
+st.title("엑셀 업로드 → 소계(7컬럼) 위에 표시 + 2줄 아래 원본 전체 그대로 + 요약")
+
+st.markdown(
+    """
+**저장 결과(각 파일 시트)**
+- 위쪽: `차트번호 == "소계"` 행만 필터 → **오더코드/청구코드/오더금액/단가/계산/일수/오더명칭** 만 표로 표시
+- 그 아래 **2줄 띄우고**
+- 원본 데이터를 **행/열 하나도 빠짐없이 그대로** 출력
+
+**요약 시트**
+- 각 파일(시트)별로, 위의 소계(7컬럼) 범위에서 **오더금액 합계**만 표로 생성
+"""
+)
+
+files = st.file_uploader("엑셀 파일 여러 개 업로드(.xlsx)", type=["xlsx"], accept_multiple_files=True)
+
+if not files:
+    st.info("엑셀 파일을 업로드하세요.")
+    st.stop()
+
+if st.button("처리 & 결과 생성", type="primary"):
+    per_file_original: Dict[str, pd.DataFrame] = {}
+    per_file_filtered: Dict[str, pd.DataFrame] = {}
+    summary_rows: List[dict] = []
+    errors: List[str] = []
+
+    for f in files:
+        try:
+            # 라벨(=시트명 기본)
+            label = re.sub(r"\.xlsx$", "", f.name, flags=re.IGNORECASE).strip() or f.name
+
+            # 원본 로드(그대로)
+            df_o, used_sheet = load_original_df(f)
+
+            # 소계 필터(7컬럼)
+            df_f = make_filtered_df(df_o)
+
+            per_file_original[label] = df_o
+            per_file_filtered[label] = df_f
+
+            summary_rows.append({
+                "시트(파일명)": label,
+                "원본시트": used_sheet,
+                "소계 행수": int(len(df_f)),
+                "오더금액 합계": float(df_f["오더금액"].sum()) if "오더금액" in df_f.columns else 0.0,
+            })
+        except Exception as e:
+            errors.append(f"[{f.name}] {e}")
+
+    if errors:
+        st.error("오류가 발생했습니다. 아래 확인:")
+        for msg in errors:
+            st.write(f"- {msg}")
+        st.stop()
+
+    summary_df = pd.DataFrame(summary_rows).sort_values("오더금액 합계", ascending=False).reset_index(drop=True)
+
+    st.subheader("요약 시트 미리보기 (소계 7컬럼 기준 오더금액 합계)")
+    st.dataframe(summary_df, use_container_width=True)
+
+    st.subheader("파일별 미리보기")
+    tabs = st.tabs(list(per_file_original.keys()))
+    for name, tab in zip(per_file_original.keys(), tabs):
+        with tab:
+            st.write(f"### {name}")
+            st.write("**(위) 소계 필터(7컬럼)**")
+            st.dataframe(per_file_filtered[name], use_container_width=True)
+            st.write("**(아래) 원본 전체(하나도 빠짐없이)**")
+            st.dataframe(per_file_original[name], use_container_width=True)
+
+    excel_bytes = build_output_excel(per_file_original, per_file_filtered, summary_df)
 
     st.download_button(
-        label='처리된 엑셀 파일 다운로드',
-        data=result,
-        file_name='processed_data.xlsx',
-        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        label="결과 엑셀 다운로드",
+        data=excel_bytes,
+        file_name="소계필터_상단표_원본전체_요약포함.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-
-
-
-
-
-
-
+    st.success("완료! 다운로드 버튼으로 결과 엑셀을 받으세요.")
