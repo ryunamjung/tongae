@@ -9,16 +9,25 @@ import pandas as pd
 import streamlit as st
 
 
-# 필수는 '차트번호' + 소계표에 필요한 기본 컬럼들(계산은 선택)
+# =========================
+# 설정
+# =========================
+# "계산"은 파일에 없을 수 있으므로 필수에서 제외
 REQUIRED_COLS = ["차트번호", "오더코드", "청구코드", "오더금액", "단가", "일수", "오더명칭"]
-FILTER_COLS = ["오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]  # 표시용은 유지
+# 소계 표는 7컬럼(계산 포함)로 보여줘야 하므로 표시 컬럼엔 포함
+FILTER_COLS = ["오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]
 
 
 # =========================
 # 유틸
 # =========================
 def _clean_sheet_name(name: str, used: set[str]) -> str:
-    """엑셀 시트명 제약 처리 + 중복 방지(31자/금지문자/중복)"""
+    """
+    엑셀 시트명 제약:
+    - 길이 31자 제한
+    - \\ / * ? : [ ] 금지
+    - 중복이면 _2, _3 ... 붙임
+    """
     name = (name or "").strip()
     name = re.sub(r"[\\/*?:\[\]]", "_", name)
     if not name:
@@ -41,7 +50,7 @@ def _clean_sheet_name(name: str, used: set[str]) -> str:
 
 
 def _to_number_series(s: pd.Series) -> pd.Series:
-    """문자/쉼표/공백 섞여도 숫자로 안전 변환 (오더금액, 단가용)"""
+    """문자/쉼표/공백 섞여도 숫자로 안전 변환"""
     s = s.astype(str).str.strip()
     s = s.replace({"nan": "", "None": ""})
     s = s.str.replace(",", "", regex=False)
@@ -62,7 +71,7 @@ def _find_target_sheet(xls: pd.ExcelFile) -> str:
 
 
 def load_original_df(uploaded) -> Tuple[pd.DataFrame, str]:
-    """원본 DF를 '그대로' 읽어오기"""
+    """원본 DF를 그대로 읽어오기"""
     data = uploaded.getvalue()
     xls = pd.ExcelFile(io.BytesIO(data), engine="openpyxl")
     target_sheet = _find_target_sheet(xls)
@@ -71,11 +80,17 @@ def load_original_df(uploaded) -> Tuple[pd.DataFrame, str]:
 
 
 def make_filtered_df(df_original: pd.DataFrame) -> pd.DataFrame:
+    """
+    1) 필수 컬럼 검사(계산 제외)
+    2) 계산 컬럼 없으면 빈 컬럼 생성
+    3) 차트번호 == 소계 필터
+    4) 7컬럼만 추출
+    """
     missing = [c for c in REQUIRED_COLS if c not in df_original.columns]
     if missing:
         raise ValueError(f"필수 컬럼 누락: {missing}")
 
-    # 계산 컬럼이 없으면 빈값으로 만들어서(하나도 안 빠지게 표시)
+    # 계산 컬럼은 없을 수 있으니 없으면 생성(빈값)
     if "계산" not in df_original.columns:
         df_original = df_original.copy()
         df_original["계산"] = ""
@@ -83,11 +98,11 @@ def make_filtered_df(df_original: pd.DataFrame) -> pd.DataFrame:
     chart = df_original["차트번호"].astype(str).str.strip()
     sub = df_original.loc[chart.eq("소계"), FILTER_COLS].copy()
 
+    # 오더금액/단가 숫자 변환
     sub["오더금액"] = _to_number_series(sub["오더금액"])
     sub["단가"] = _to_number_series(sub["단가"])
 
     return sub
-
 
 
 def build_output_excel(
@@ -96,12 +111,13 @@ def build_output_excel(
     summary_df: pd.DataFrame
 ) -> bytes:
     """
-    출력 엑셀 생성 규칙(요구사항 그대로):
-    - 각 파일별 시트
-      1) 위쪽: 차트번호=='소계' 필터 값(7컬럼)만 '표'로 표시 (헤더 포함)
-      2) 그 아래 '2줄' 띄우고
-      3) 원본을 '하나도 빠짐없이' 그대로(모든 행/모든 컬럼, 헤더 포함)
-    - 요약 시트: 소계 필터 7컬럼 안에서 오더금액 합계(파일명별)
+    저장 규칙(요구사항 그대로):
+    - 각 파일 시트:
+      (1) 위: 소계(7컬럼) 표 (헤더 포함)
+      (2) 그 아래 2줄 띄우고
+      (3) 원본 전체를 행/열 하나도 빠짐없이 그대로 (헤더 포함)
+    - 요약 시트:
+      파일(시트)별 소계(7컬럼)에서 오더금액 합계만
     """
     out = io.BytesIO()
     used_sheet_names: set[str] = set()
@@ -117,16 +133,13 @@ def build_output_excel(
             df_f = per_file_filtered[file_label]
             df_o = per_file_original[file_label]
 
-            # 1) 위쪽: 소계 필터 표(헤더 포함) - 시작 row 0
-            #    (요구가 "가장윗칸"에 붙여주기 -> A1부터)
+            # (1) 위쪽: 소계(7컬럼) 표 (A1부터)
             df_f.to_excel(writer, sheet_name=sh, index=False, startrow=0)
 
-            # 2) 아래 2줄 띄우고 3) 원본(헤더 포함)
-            # filtered 표가 차지하는 행 수:
-            # - 헤더 1행 + 데이터 len(df_f)
+            # (2) + (3) : 2줄 아래 원본 전체
+            # 소계 표가 차지하는 행 수 = 헤더 1 + 데이터 len
             filtered_rows = 1 + len(df_f)
-            # 두 줄 공백 => +2
-            startrow_original = filtered_rows + 2
+            startrow_original = filtered_rows + 2  # 정확히 2줄 띄움
             df_o.to_excel(writer, sheet_name=sh, index=False, startrow=startrow_original)
 
     out.seek(0)
@@ -136,18 +149,22 @@ def build_output_excel(
 # =========================
 # Streamlit UI
 # =========================
-st.set_page_config(page_title="소계 필터 + 원본 그대로 저장", layout="wide")
+st.set_page_config(page_title="소계(7컬럼) + 2줄 아래 원본 전체 + 요약", layout="wide")
+
 st.title("엑셀 업로드 → 소계(7컬럼) 위에 표시 + 2줄 아래 원본 전체 그대로 + 요약")
 
 st.markdown(
     """
-**저장 결과(각 파일 시트)**
-- 위쪽: `차트번호 == "소계"` 행만 필터 → **오더코드/청구코드/오더금액/단가/계산/일수/오더명칭** 만 표로 표시
+### 저장 결과(각 파일 시트)
+- **위쪽**: `차트번호 == "소계"` 행만 필터 →  
+  `오더코드, 청구코드, 오더금액, 단가, 계산, 일수, 오더명칭` **7컬럼만 표로 표시**
 - 그 아래 **2줄 띄우고**
-- 원본 데이터를 **행/열 하나도 빠짐없이 그대로** 출력
+- **원본 데이터를 행/열 하나도 빠짐없이 그대로 출력**
 
-**요약 시트**
-- 각 파일(시트)별로, 위의 소계(7컬럼) 범위에서 **오더금액 합계**만 표로 생성
+### 요약 시트
+- 파일(시트)별로, 위 소계(7컬럼) 범위에서 **오더금액 합계**만 표 생성
+
+> ⚠️ `계산` 컬럼이 파일에 없으면, 소계표에서는 **빈 컬럼으로 자동 생성**합니다.
 """
 )
 
@@ -165,13 +182,12 @@ if st.button("처리 & 결과 생성", type="primary"):
 
     for f in files:
         try:
-            # 라벨(=시트명 기본)
             label = re.sub(r"\.xlsx$", "", f.name, flags=re.IGNORECASE).strip() or f.name
 
             # 원본 로드(그대로)
             df_o, used_sheet = load_original_df(f)
 
-            # 소계 필터(7컬럼)
+            # 소계(7컬럼) 표 생성 (계산 없으면 빈컬럼으로 자동 생성)
             df_f = make_filtered_df(df_o)
 
             per_file_original[label] = df_o
@@ -181,7 +197,7 @@ if st.button("처리 & 결과 생성", type="primary"):
                 "시트(파일명)": label,
                 "원본시트": used_sheet,
                 "소계 행수": int(len(df_f)),
-                "오더금액 합계": float(df_f["오더금액"].sum()) if "오더금액" in df_f.columns else 0.0,
+                "오더금액 합계": float(df_f["오더금액"].sum()),
             })
         except Exception as e:
             errors.append(f"[{f.name}] {e}")
@@ -192,7 +208,11 @@ if st.button("처리 & 결과 생성", type="primary"):
             st.write(f"- {msg}")
         st.stop()
 
-    summary_df = pd.DataFrame(summary_rows).sort_values("오더금액 합계", ascending=False).reset_index(drop=True)
+    summary_df = (
+        pd.DataFrame(summary_rows)
+        .sort_values("오더금액 합계", ascending=False)
+        .reset_index(drop=True)
+    )
 
     st.subheader("요약 시트 미리보기 (소계 7컬럼 기준 오더금액 합계)")
     st.dataframe(summary_df, use_container_width=True)
@@ -202,7 +222,7 @@ if st.button("처리 & 결과 생성", type="primary"):
     for name, tab in zip(per_file_original.keys(), tabs):
         with tab:
             st.write(f"### {name}")
-            st.write("**(위) 소계 필터(7컬럼)**")
+            st.write("**(위) 소계(7컬럼)**")
             st.dataframe(per_file_filtered[name], use_container_width=True)
             st.write("**(아래) 원본 전체(하나도 빠짐없이)**")
             st.dataframe(per_file_original[name], use_container_width=True)
@@ -217,4 +237,3 @@ if st.button("처리 & 결과 생성", type="primary"):
     )
 
     st.success("완료! 다운로드 버튼으로 결과 엑셀을 받으세요.")
-
