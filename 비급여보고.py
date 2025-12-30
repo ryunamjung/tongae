@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple, Optional
 import pandas as pd
 import streamlit as st
 
-APP_VERSION = "2025-12-30 v4 (계산 강제 비필수 + 계산용량 자동매핑 + 디버그표시)"
+APP_VERSION = "비급여보고통계 남양주백병원"
 
 # ✅ 너가 준 ALIASES 그대로
 ALIASES: Dict[str, List[str]] = {
@@ -168,10 +168,10 @@ def _build_excel(
 # =========================
 # UI
 # =========================
-st.set_page_config(page_title="소계(7컬럼)+원본전체+요약", layout="wide")
+st.set_page_config(page_title="비급여관련 통계도우미", layout="wide")
 st.write(f"✅ RUNNING: {APP_VERSION}")
 
-st.title("엑셀 업로드 → 소계(7컬럼) 위 + 2줄 아래 원본 전체 + 요약")
+st.title("코드별 엑셀파일 xlsx로 재저장후 여러파일 한번에 업로드 → 요약, 각각 파일별 sheet 구성됨")
 
 files = st.file_uploader("엑셀 파일 여러 개 업로드(.xlsx)", type=["xlsx"], accept_multiple_files=True)
 if not files:
@@ -243,3 +243,4 @@ if st.button("처리 & 결과 생성", type="primary"):
     )
 
     st.success("완료! 다운로드 버튼으로 결과 엑셀을 받으세요.")
+
