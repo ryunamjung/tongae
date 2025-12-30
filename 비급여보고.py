@@ -9,11 +9,9 @@ import pandas as pd
 import streamlit as st
 
 
-# =========================
-# 설정
-# =========================
-REQUIRED_COLS = ["차트번호", "오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]
-FILTER_COLS = ["오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]
+# 필수는 '차트번호' + 소계표에 필요한 기본 컬럼들(계산은 선택)
+REQUIRED_COLS = ["차트번호", "오더코드", "청구코드", "오더금액", "단가", "일수", "오더명칭"]
+FILTER_COLS = ["오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]  # 표시용은 유지
 
 
 # =========================
@@ -73,19 +71,23 @@ def load_original_df(uploaded) -> Tuple[pd.DataFrame, str]:
 
 
 def make_filtered_df(df_original: pd.DataFrame) -> pd.DataFrame:
-    """차트번호 == '소계' 필터 후, 지정 7컬럼만 추출"""
     missing = [c for c in REQUIRED_COLS if c not in df_original.columns]
     if missing:
         raise ValueError(f"필수 컬럼 누락: {missing}")
 
+    # 계산 컬럼이 없으면 빈값으로 만들어서(하나도 안 빠지게 표시)
+    if "계산" not in df_original.columns:
+        df_original = df_original.copy()
+        df_original["계산"] = ""
+
     chart = df_original["차트번호"].astype(str).str.strip()
     sub = df_original.loc[chart.eq("소계"), FILTER_COLS].copy()
 
-    # 숫자열 안전 변환(요약/합계 정확)
     sub["오더금액"] = _to_number_series(sub["오더금액"])
     sub["단가"] = _to_number_series(sub["단가"])
 
     return sub
+
 
 
 def build_output_excel(
@@ -215,3 +217,4 @@ if st.button("처리 & 결과 생성", type="primary"):
     )
 
     st.success("완료! 다운로드 버튼으로 결과 엑셀을 받으세요.")
+
