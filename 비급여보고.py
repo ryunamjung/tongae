@@ -8,9 +8,8 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import streamlit as st
 
-APP_VERSION = "비급여보고통계 남양주백병원"
+APP_VERSION = "비급여보고통계 남양주백병원 / vCalcSubtotalOnly"
 
-# ✅ 너가 준 ALIASES 그대로
 ALIASES: Dict[str, List[str]] = {
     "차트번호": ["차트번호", "차트", "chartno", "chart_no", "chart"],
     "오더코드": ["오더코드", "오더 코드", "처방코드", "처방 코드", "ordercode", "order_code"],
@@ -22,10 +21,7 @@ ALIASES: Dict[str, List[str]] = {
     "오더명칭": ["오더명칭", "오더 명칭", "처방명", "처방명칭", "명칭", "항목명", "ordername", "order_name"],
 }
 
-# ✅ 필수 컬럼(계산은 원래부터 제외)
 REQUIRED_COLS = ["차트번호", "오더코드", "청구코드", "오더금액", "단가", "일수", "오더명칭"]
-
-# ✅ 위쪽 소계표는 7컬럼(계산 포함)으로 보여줘야 함
 DISPLAY_COLS = ["오더코드", "청구코드", "오더금액", "단가", "계산", "일수", "오더명칭"]
 
 
@@ -84,9 +80,6 @@ def _load_original(uploaded) -> Tuple[pd.DataFrame, str]:
 
 
 def _canonical_view(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
-    """
-    alias 기반 rename을 적용한 작업용 df + (표준컬럼 -> 실제 사용된 원본컬럼명) 매핑 리턴
-    """
     norm_to_raw = {_norm(c): c for c in df.columns}
     rename_map_raw_to_std: Dict[str, str] = {}
     picked_std_to_raw: Dict[str, str] = {}
@@ -104,18 +97,10 @@ def _canonical_view(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
     return dfw, picked_std_to_raw
 
 
-def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str], float]:
-    """
-    - 계산은 어떤 경우에도 필수검사에서 제외(강제 안전장치)
-    - 계산은 계산용량/횟수/수량 등으로 매핑되면 그걸 사용
-    - 매핑이 안되면 빈 컬럼 생성
-    - ✅ 요약용: '상세행(소계 제외) 계산 합계'를 함께 산출
-    """
+def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
     dfw, picked = _canonical_view(df_original)
 
-    # ✅ 강제 안전장치: 혹시 누가 REQUIRED_COLS에 계산을 넣어도 무조건 제거
     safe_required = [c for c in REQUIRED_COLS if c != "계산"]
-
     missing = [c for c in safe_required if c not in dfw.columns]
     if missing:
         raise ValueError(
@@ -123,26 +108,23 @@ def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, s
             f"현재 원본 컬럼(일부): {list(df_original.columns)[:30]} ... (총 {len(df_original.columns)}개)"
         )
 
-    # ✅ 계산 컬럼 확보: 없으면 빈칸 생성
     if "계산" not in dfw.columns:
         dfw["계산"] = ""
         picked["계산"] = "(없음→빈칸생성)"
 
-    # ✅ '소계' 판정(공백/개행 등 변형 방지)
+    # ✅ 소계 판정 강화 ("소 계"도 소계로)
     chart_raw = dfw["차트번호"].astype(str).fillna("").str.strip()
-    chart_key = chart_raw.str.replace(r"\s+", "", regex=True)  # "소 계" 등도 "소계"로
+    chart_key = chart_raw.str.replace(r"\s+", "", regex=True)
     is_subtotal = chart_key.eq("소계")
 
-    # ✅ 소계행만 위쪽 표로
     sub = dfw.loc[is_subtotal, DISPLAY_COLS].copy()
+
+    # ✅ 오더금액 합계처럼, 소계표(df_f) 안에서 계산도 숫자화해 둠
     sub["오더금액"] = _to_num(sub["오더금액"])
     sub["단가"] = _to_num(sub["단가"])
-    sub["계산"] = _to_num(sub["계산"])
+    sub["계산"] = _to_num(sub["계산"])   # ✅ 핵심
 
-    # ✅ 상세행(소계 제외) 계산 합계: 보통 사용자가 원하는 "총 계산량"
-    detail_calc_sum = float(_to_num(dfw.loc[~is_subtotal, "계산"]).sum())
-
-    return sub, picked, detail_calc_sum
+    return sub, picked
 
 
 def _build_excel(
@@ -154,7 +136,6 @@ def _build_excel(
     used: set[str] = set()
 
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        # 요약 시트
         sum_name = _clean_sheet_name("요약", used)
         summary_df.to_excel(writer, sheet_name=sum_name, index=False)
 
@@ -163,10 +144,7 @@ def _build_excel(
             df_f = per_sub[label]
             df_o = per_orig[label]
 
-            # 위: 소계(7컬럼)
             df_f.to_excel(writer, sheet_name=sh, index=False, startrow=0)
-
-            # 2줄 아래: 원본 전체(하나도 빠짐없이)
             startrow = (1 + len(df_f)) + 2
             df_o.to_excel(writer, sheet_name=sh, index=False, startrow=startrow)
 
@@ -200,18 +178,21 @@ if st.button("처리 & 결과 생성", type="primary"):
             label = re.sub(r"\.xlsx$", "", f.name, flags=re.IGNORECASE).strip() or f.name
 
             df_o, used_sheet = _load_original(f)
-            df_f, picked, detail_calc_sum = _make_filtered(df_o)
+            df_f, picked = _make_filtered(df_o)
 
             per_orig[label] = df_o
             per_sub[label] = df_f
+
+            # ✅ 오더금액합계와 동일 방식: 소계표(df_f)에서 합산
+            order_sum = float(df_f["오더금액"].sum()) if "오더금액" in df_f.columns else 0.0
+            calc_sum = float(df_f["계산"].sum()) if "계산" in df_f.columns else 0.0
 
             summary_rows.append({
                 "시트(파일명)": label,
                 "원본시트": used_sheet,
                 "소계 행수": int(len(df_f)),
-                "오더금액 합계": float(df_f["오더금액"].sum()),
-                "계산 합계(소계행)": float(df_f["계산"].sum()),
-                "계산 합계(상세행)": float(detail_calc_sum),  # ✅ 추가(진짜 필요한 경우가 대부분)
+                "오더금액 합계": order_sum,
+                "계산 합계": calc_sum,  # ✅ 요청: 소계(df_f)에서 계산용량(=계산) 합계
             })
 
             debug_rows.append({
@@ -225,6 +206,8 @@ if st.button("처리 & 결과 생성", type="primary"):
                 "계산(매핑)": picked.get("계산", ""),
                 "일수(매핑)": picked.get("일수", ""),
                 "오더명칭(매핑)": picked.get("오더명칭", ""),
+                "소계표 계산 상위5": ", ".join(map(str, df_f["계산"].head(5).tolist())) if "계산" in df_f.columns else "",
+                "소계표 계산 dtype": str(df_f["계산"].dtype) if "계산" in df_f.columns else "(없음)",
             })
 
         except Exception as e:
@@ -236,16 +219,12 @@ if st.button("처리 & 결과 생성", type="primary"):
             st.write(f"- {msg}")
         st.stop()
 
-    summary_df = (
-        pd.DataFrame(summary_rows)
-        .sort_values("오더금액 합계", ascending=False)
-        .reset_index(drop=True)
-    )
+    summary_df = pd.DataFrame(summary_rows).sort_values("오더금액 합계", ascending=False).reset_index(drop=True)
     st.subheader("요약 시트 미리보기 (소계 기준 오더금액 합계 + 계산 합계)")
     st.dataframe(summary_df, use_container_width=True)
 
     if show_debug:
-        st.subheader("디버그: 표준 컬럼 매핑 결과(어떤 원본 컬럼을 사용했는지)")
+        st.subheader("디버그: 표준 컬럼 매핑 결과/값 확인")
         st.dataframe(pd.DataFrame(debug_rows), use_container_width=True)
 
     excel_bytes = _build_excel(per_orig, per_sub, summary_df)
