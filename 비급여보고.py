@@ -130,8 +130,10 @@ def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, s
     chart = dfw["차트번호"].astype(str).str.strip()
     sub = dfw.loc[chart.eq("소계"), DISPLAY_COLS].copy()
 
+    # ✅ 숫자형 변환 (요약/합계용)
     sub["오더금액"] = _to_num(sub["오더금액"])
     sub["단가"] = _to_num(sub["단가"])
+    sub["계산"] = _to_num(sub["계산"])  # ✅ 추가: 소계 '계산' 합계 계산을 위해 숫자화
 
     return sub, picked
 
@@ -201,6 +203,7 @@ if st.button("처리 & 결과 생성", type="primary"):
                 "원본시트": used_sheet,
                 "소계 행수": int(len(df_f)),
                 "오더금액 합계": float(df_f["오더금액"].sum()),
+                "계산 합계": float(df_f["계산"].sum()),  # ✅ 추가: 소계 '계산' 컬럼 합계
             })
 
             debug_rows.append({
@@ -225,8 +228,12 @@ if st.button("처리 & 결과 생성", type="primary"):
             st.write(f"- {msg}")
         st.stop()
 
-    summary_df = pd.DataFrame(summary_rows).sort_values("오더금액 합계", ascending=False).reset_index(drop=True)
-    st.subheader("요약 시트 미리보기 (소계 기준 오더금액 합계)")
+    summary_df = (
+        pd.DataFrame(summary_rows)
+        .sort_values("오더금액 합계", ascending=False)
+        .reset_index(drop=True)
+    )
+    st.subheader("요약 시트 미리보기 (소계 기준 오더금액 합계 + 계산 합계)")
     st.dataframe(summary_df, use_container_width=True)
 
     if show_debug:
@@ -243,4 +250,3 @@ if st.button("처리 & 결과 생성", type="primary"):
     )
 
     st.success("완료! 다운로드 버튼으로 결과 엑셀을 받으세요.")
-
