@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 import re
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -104,11 +104,12 @@ def _canonical_view(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
     return dfw, picked_std_to_raw
 
 
-def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
+def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str], float]:
     """
     - 계산은 어떤 경우에도 필수검사에서 제외(강제 안전장치)
     - 계산은 계산용량/횟수/수량 등으로 매핑되면 그걸 사용
     - 매핑이 안되면 빈 컬럼 생성
+    - ✅ 요약용: '상세행(소계 제외) 계산 합계'를 함께 산출
     """
     dfw, picked = _canonical_view(df_original)
 
@@ -127,15 +128,21 @@ def _make_filtered(df_original: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, s
         dfw["계산"] = ""
         picked["계산"] = "(없음→빈칸생성)"
 
-    chart = dfw["차트번호"].astype(str).str.strip()
-    sub = dfw.loc[chart.eq("소계"), DISPLAY_COLS].copy()
+    # ✅ '소계' 판정(공백/개행 등 변형 방지)
+    chart_raw = dfw["차트번호"].astype(str).fillna("").str.strip()
+    chart_key = chart_raw.str.replace(r"\s+", "", regex=True)  # "소 계" 등도 "소계"로
+    is_subtotal = chart_key.eq("소계")
 
-    # ✅ 숫자형 변환 (요약/합계용)
+    # ✅ 소계행만 위쪽 표로
+    sub = dfw.loc[is_subtotal, DISPLAY_COLS].copy()
     sub["오더금액"] = _to_num(sub["오더금액"])
     sub["단가"] = _to_num(sub["단가"])
-    sub["계산"] = _to_num(sub["계산"])  # ✅ 추가: 소계 '계산' 합계 계산을 위해 숫자화
+    sub["계산"] = _to_num(sub["계산"])
 
-    return sub, picked
+    # ✅ 상세행(소계 제외) 계산 합계: 보통 사용자가 원하는 "총 계산량"
+    detail_calc_sum = float(_to_num(dfw.loc[~is_subtotal, "계산"]).sum())
+
+    return sub, picked, detail_calc_sum
 
 
 def _build_excel(
@@ -193,7 +200,7 @@ if st.button("처리 & 결과 생성", type="primary"):
             label = re.sub(r"\.xlsx$", "", f.name, flags=re.IGNORECASE).strip() or f.name
 
             df_o, used_sheet = _load_original(f)
-            df_f, picked = _make_filtered(df_o)
+            df_f, picked, detail_calc_sum = _make_filtered(df_o)
 
             per_orig[label] = df_o
             per_sub[label] = df_f
@@ -203,7 +210,8 @@ if st.button("처리 & 결과 생성", type="primary"):
                 "원본시트": used_sheet,
                 "소계 행수": int(len(df_f)),
                 "오더금액 합계": float(df_f["오더금액"].sum()),
-                "계산 합계": float(df_f["계산"].sum()),  # ✅ 추가: 소계 '계산' 컬럼 합계
+                "계산 합계(소계행)": float(df_f["계산"].sum()),
+                "계산 합계(상세행)": float(detail_calc_sum),  # ✅ 추가(진짜 필요한 경우가 대부분)
             })
 
             debug_rows.append({
